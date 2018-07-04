@@ -1,119 +1,147 @@
 package com.xy.demo;
 
 import java.io.BufferedReader;
-import java.io.BufferedWriter;
 import java.io.IOException;
 import java.io.InputStreamReader;
-import java.io.OutputStreamWriter;
-import java.util.concurrent.atomic.AtomicInteger;  
+import java.io.PrintWriter;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
+import java.util.concurrent.FutureTask;  
    
 public class JavaShellUtil {  
-    // 基本路径  
-    private static final String basePath = "/home/xuyong/demo/";  
-   
-    // 发送文件到Kondor系统的Shell的文件名(绝对路径)  
-    private static final String shellName = basePath  + "inter.sh";  
     
-    private static AtomicInteger rwFlag = new AtomicInteger(1);
+    private Executor executor=Executors.newFixedThreadPool(4);
     
-    private static volatile boolean running = true;
+    private ConcurrentMap<String, Robot> robots = new ConcurrentHashMap<>();
+    
    
-    public int executeShell(String shellCommand) throws IOException, InterruptedException {  
-        System.out.println("shellCommand:"+shellCommand);  
-        BufferedReader bufferedReader = null;  
-        BufferedWriter bufferedWriter = null;
-		
-   
-        Process pid = null;  
-        String[] cmd = { "/bin/sh", "-c", shellCommand };  
-        pid = Runtime.getRuntime().exec(cmd);  
-        if (pid != null) {  
-            bufferedReader = new BufferedReader(new InputStreamReader(pid.getInputStream()), 1024); 
-            new Thread(new MyReader(bufferedReader)).start();
-            bufferedWriter = new BufferedWriter(new OutputStreamWriter(pid.getOutputStream()),1024);
-            new Thread(new MyWriter(bufferedWriter)).start();
-            pid.waitFor();
-            running = false;
-        } else {  
-            System.out.println("没有pid");  
-            return -1;
-        }
-        return 1;  
-    }  
-   
-    public static class MyReader implements Runnable{
-    	BufferedReader bufferedReader = null; 
-    	public MyReader(BufferedReader bufferedReader){
-    		this.bufferedReader = bufferedReader;
+    public String interActWith(String robotName,String said) throws IOException, InterruptedException, ExecutionException {  
+    	Robot robot = robots.get(robotName);
+    	
+    	if(robot==null || !robot.isAlive()){
+        	return null;
     	}
+	     
+        FutureTask<String> futureTask = new FutureTask<String>(new Interact(robot,said));
+        executor.execute(futureTask);
+        
+        String response = futureTask.get();
+        return response;  
+    }  
+    
+    public void createRobot(String robotName){
+    	Robot robot = Robot.createRobot();
+        robots.put(robotName, robot);
+    }
+    
+    public static class Interact implements Callable<String>{
+         Robot robot = null; 
+         String said = null;
+         public Interact(Robot robot,String said){
+        	 this.robot=robot;
+        	 this.said = said;
+         }
 		@Override
-		public void run() {
+		public String call() {
 			// TODO Auto-generated method stub
-			while(running){
-				while(rwFlag.get()!=0){
-					try {
-						Thread.sleep(100L);
-					} catch (InterruptedException e) {
-						// TODO Auto-generated catch block
-						e.printStackTrace();
-					}
-				}
-        		System.out.println("reading...");
-		        String line = null;  
-				 try {
-					while (bufferedReader != null  
-					            && (line = bufferedReader.readLine()) != null) {  
-					        System.out.println(line);  
-					        break;
-					    }
-				} catch (IOException e) {
-					// TODO Auto-generated catch block
-					e.printStackTrace();
-				}  
-				rwFlag.incrementAndGet();
-			}
+        	StringBuilder sb = new StringBuilder();
+            try {
+            	PrintWriter outputWriter = robot.getOutputWriter();
+            	outputWriter.println(said);
+                String answered = null; 
+                int i=0;
+            	while ((answered=robot.getBufferedReader().readLine())!=null) {  
+            		answered = robot.getBufferedReader().readLine();
+            		sb.append(answered).append('\n');  
+			    }
+			} catch (IOException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			} 
+            return sb.toString();
 		}
     	
     }
     
-    public static class MyWriter implements Runnable{
-    	int i =0;
-    	BufferedWriter bufferedWriter = null;
-    	
-    	final BufferedReader reader =  new BufferedReader (new InputStreamReader(System.in)); 
-    	
-    	public MyWriter(BufferedWriter bufferedWriter){
-    		this.bufferedWriter = bufferedWriter;
-    	}
-		@Override
-		public void run() {
-			// TODO Auto-generated method stub
-	        try {
-	        	while(running){
-	        		while(rwFlag.get()!=1){
-	        			try {
-							Thread.sleep(100L);
-						} catch (InterruptedException e) {
-							// TODO Auto-generated catch block
-							e.printStackTrace();
-						}
-	        		}
-	        		System.out.println("writing...");
-	        		String input = reader.readLine();
-	        		bufferedWriter.write(input + "\n");
-	        		bufferedWriter.flush();
-	        		rwFlag.decrementAndGet();
-	        	}
+    public static class Robot{
+    	private static final String basePath = "/home/xuyong/demo/";  
+        private static final String shellName = basePath  + "sa.bin -t ./";  
+        
+        private Process pid;
+        private BufferedReader bufferedReader = null;  
+        private PrintWriter outputWriter = null;
+        
+        private Robot(){}
+        
+        public static Robot createRobot(){
+
+            String[] cmd = { "/bin/sh", "-c", shellName };  
+            Process pid;
+    		try {
+    			pid = Runtime.getRuntime().exec(cmd);
+    		} catch (IOException e) {
+    			// TODO Auto-generated catch block
+    			e.printStackTrace();
+    			return null;
+    		} 
+
+    		BufferedReader bufferedReader = new BufferedReader(new InputStreamReader(pid.getInputStream()),128); 
+    		PrintWriter outputWriter = new PrintWriter(pid.getOutputStream(), true);
+            
+            Robot robot = new Robot();
+            robot.pid=pid;
+            robot.bufferedReader=bufferedReader;
+            robot.outputWriter=outputWriter;
+            String answer = null;
+            try {
+				while((answer = bufferedReader.readLine())!=null){
+					System.out.println(answer);
+				}
+				System.out.println("init done...");
+				System.out.flush();
 			} catch (IOException e) {
 				// TODO Auto-generated catch block
 				e.printStackTrace();
 			}
+            return robot;
+        }
+        
+        public boolean isAlive(){
+        	return pid.isAlive() && pid.getInputStream()!=null && pid.getOutputStream()!=null;
+        }
+
+    	public BufferedReader getBufferedReader() {
+    		return bufferedReader;
+    	}
+
+		public PrintWriter getOutputWriter() {
+			return outputWriter;
 		}
+
     }
     
-    public static void main(String[] args) throws InterruptedException {  
+    public static void main(String[] args) throws InterruptedException, ExecutionException {  
         try {  
-            new JavaShellUtil().executeShell(shellName);  
+        	JavaShellUtil util = new JavaShellUtil();
+        	util.createRobot("robot");
+        	BufferedReader bufferedReader = new BufferedReader(new InputStreamReader(System.in), 1024);
+        	while(true){
+	        	String saying = bufferedReader.readLine();
+	        	
+	        	if(saying != null){
+	        		System.out.println("saying: "+ saying);
+		        	String answer = util.interActWith("robot",saying);  
+		        	System.out.println("answer: " + answer);
+					System.out.flush();
+	        	}else{
+	        		Thread.sleep(500L);
+	        	}
+        	}
+
         } catch (IOException e) {  
             e.printStackTrace();  
         }  
